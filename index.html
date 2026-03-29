@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lumina: Mind & Heart Tracker</title>
+    <link rel="manifest" href="manifest.json">
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        :root { --primary: #6c5ce7; --bg: #1a1a2e; --card: #242442; --text: #fdfdfd; --empathy: #ff7675; --knowledge: #74b9ff; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: var(--bg); color: var(--text); margin: 0; display: flex; flex-direction: column; align-items: center; min-height: 100vh; padding: 20px; }
+        .app-container { width: 100%; max-width: 500px; }
+        .card { background: var(--card); padding: 20px; border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.3); margin-bottom: 20px; border: 1px solid #333; }
+        input, textarea { width: 100%; padding: 12px; background: #16213e; border: 1px solid #444; border-radius: 10px; color: white; margin-bottom: 10px; box-sizing: border-box; }
+        button { width: 100%; padding: 15px; border: none; border-radius: 10px; font-weight: bold; cursor: pointer; transition: 0.3s; margin-bottom: 5px; }
+        .btn-log { background: var(--primary); color: white; }
+        .btn-share { background: #27ae60; color: white; }
+        .btn-reset { background: transparent; color: #888; font-size: 12px; }
+        
+        #graph-container { width: 100%; height: 350px; background: #0f3460; border-radius: 15px; position: relative; overflow: hidden; }
+        .book-preview { display: none; text-align: center; margin: 15px 0; padding: 10px; background: #16213e; border-radius: 10px; }
+        .book-preview img { width: 60px; border-radius: 4px; }
+        
+        #congrats-modal { display: none; padding: 15px; background: #1b4332; border: 1px solid #2d6a4f; border-radius: 10px; margin-top: 15px; }
+        .badge-row { display: flex; justify-content: center; gap: 10px; margin-top: 15px; }
+        .badge-icon { font-size: 20px; padding: 8px; background: #333; border-radius: 50%; filter: grayscale(1); transition: 0.5s; }
+        .badge-icon.unlocked { filter: grayscale(0); background: #444; box-shadow: 0 0 10px var(--primary); }
+    </style>
+</head>
+<body>
+
+<div class="app-container">
+    <div class="card">
+        <h2 style="margin:0 0 10px 0;">Lumina 📚</h2>
+        <input type="text" id="bookSearch" placeholder="Search a book title..." onchange="searchBook()">
+        
+        <div id="book-preview" class="book-preview">
+            <img id="cover" src="" alt="Cover">
+            <h4 id="display-title" style="margin:5px 0;"></h4>
+            <textarea id="thoughts" placeholder="What did you learn or feel?"></textarea>
+            <button class="btn-log" onclick="logBook()">Complete Journey</button>
+        </div>
+
+        <div id="congrats-modal">
+            <h4 style="margin:0;">🎉 Achievement Unlocked!</h4>
+            <p id="growth-report" style="font-size: 14px;"></p>
+        </div>
+    </div>
+
+    <div id="graph-container">
+        <svg id="knowledge-graph" style="width:100%; height:100%;"></svg>
+    </div>
+
+    <div class="badge-row" id="badge-row">
+        <div id="badge-empath" class="badge-icon" title="The Empath">❤️</div>
+        <div id="badge-historian" class="badge-icon" title="Historian">📜</div>
+        <div id="badge-polymath" class="badge-icon" title="Polymath">🧠</div>
+    </div>
+
+    <div style="margin-top:20px; text-align:center;">
+        <button class="btn-share" onclick="exportGraph()">📸 Share Mind Map</button>
+        <button class="btn-reset" onclick="resetAllData()">Reset All Data</button>
+    </div>
+</div>
+
+<canvas id="exportCanvas" style="display:none;"></canvas>
+
+<script>
+    // --- DATA STATE ---
+    let currentBook = null;
+    let userProfile = JSON.parse(localStorage.getItem('lumina_profile')) || {
+        history: [],
+        badges: [],
+        graphData: {
+            nodes: [
+                { id: "Self", radius: 15, color: "#fff" },
+                { id: "Empathy", radius: 12, color: "#ff7675" },
+                { id: "Knowledge", radius: 12, color: "#74b9ff" }
+            ],
+            links: [{ source: "Self", target: "Empathy" }, { source: "Self", target: "Knowledge" }]
+        }
+    };
+
+    // --- SEARCH LOGIC ---
+    async function searchBook() {
+        const query = document.getElementById('bookSearch').value;
+        const resp = await fetch(`https://www.googleapis.com/books/v1/volumes?q=${query}`);
+        const data = await resp.json();
+        if (data.items) {
+            currentBook = data.items[0].volumeInfo;
+            document.getElementById('display-title').innerText = currentBook.title;
+            document.getElementById('cover').src = currentBook.imageLinks?.thumbnail || '';
+            document.getElementById('book-preview').style.display = 'block';
+        }
+    }
+
+    // --- ANALYTICS LOGIC ---
+    function logBook() {
+        const thoughts = document.getElementById('thoughts').value;
+        const cats = currentBook.categories?.join(' ').toLowerCase() || '';
+        const isFiction = cats.includes('fiction');
+        const estLexile = Math.min(1400, (currentBook.pageCount || 200) + 500);
+
+        // Sentiment/Empathy Score
+        const empWords = ['feel', 'felt', 'perspective', 'struggle', 'human', 'understand'];
+        let matchCount = 0;
+        empWords.forEach(w => { if(thoughts.toLowerCase().includes(w)) matchCount++ });
+        const empScore = Math.min(100, (matchCount * 25) + 20);
+
+        // Update State
+        userProfile.history.push({ title: currentBook.title, genre: isFiction ? 'fiction' : 'nonfiction', cats });
+        const target = isFiction ? "Empathy" : "Knowledge";
+        userProfile.graphData.nodes.push({ id: currentBook.title, radius: 8, color: isFiction ? "#fab1a0" : "#81ecec" });
+        userProfile.graphData.links.push({ source: target, target: currentBook.title });
+
+        // Check Badges
+        if (userProfile.history.length >= 5 && !userProfile.badges.includes('polymath')) userProfile.badges.push('polymath');
+        if (isFiction && !userProfile.badges.includes('empath')) userProfile.badges.push('empath');
+
+        saveAndRefresh();
+        showCongrats(currentBook.title, empScore, estLexile);
+    }
+
+    function saveAndRefresh() {
+        localStorage.setItem('lumina_profile', JSON.stringify(userProfile));
+        updateGraph();
+        updateBadges();
+    }
+
+    // --- VISUALIZATION (D3.js) ---
+    const svg = d3.select("#knowledge-graph");
+    let simulation = d3.forceSimulation(userProfile.graphData.nodes)
+        .force("link", d3.forceLink(userProfile.graphData.links).id(d => d.id).distance(60))
+        .force("charge", d3.forceManyBody().strength(-80))
+        .force("center", d3.forceCenter(200, 175));
+
+    function updateGraph() {
+        svg.selectAll("*").remove();
+        const link = svg.append("g").attr("stroke", "#444").selectAll("line")
+            .data(userProfile.graphData.links).enter().append("line");
+        const node = svg.append("g").selectAll("circle")
+            .data(userProfile.graphData.nodes).enter().append("circle")
+            .attr("r", d => d.radius).attr("fill", d => d.color);
+        const label = svg.append("g").selectAll("text")
+            .data(userProfile.graphData.nodes).enter().append("text")
+            .text(d => d.id).attr("font-size", "8px").attr("fill", "#888").attr("dx", 10);
+
+        simulation.nodes(userProfile.graphData.nodes);
+        simulation.force("link").links(userProfile.graphData.links);
+        simulation.on("tick", () => {
+            link.attr("x1", d => d.source.x).attr("y1", d => d.source.y).attr("x2", d => d.target.x).attr("y2", d => d.target.y);
+            node.attr("cx", d => d.x).attr("cy", d => d.y);
+            label.attr("x", d => d.x).attr("y", d => d.y);
+        });
+        simulation.alpha(1).restart();
+    }
+
+    function updateBadges() {
+        userProfile.badges.forEach(b => document.getElementById(`badge-${b}`).classList.add('unlocked'));
+    }
+
+    function showCongrats(title, score, lexile) {
+        const modal = document.getElementById('congrats-modal');
+        document.getElementById('growth-report').innerHTML = `Finished: <b>${title}</b><br>Empathy Depth: ${score}% | Lexile: ~${lexile}L`;
+        modal.style.display = 'block';
+    }
+
+    function resetAllData() { if(confirm("Delete your mind map?")) { localStorage.clear(); location.reload(); } }
+
+    function exportGraph() {
+        const svgEl = document.getElementById('knowledge-graph');
+        const canvas = document.getElementById('exportCanvas');
+        const svgData = new XMLSerializer().serializeToString(svgEl);
+        const img = new Image();
+        img.onload = () => {
+            canvas.width = 600; canvas.height = 600;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = "#1a1a2e"; ctx.fillRect(0,0,600,600);
+            ctx.drawImage(img, 0, 0, 600, 600);
+            const link = document.createElement('a');
+            link.download = 'my-lumina-map.png'; link.href = canvas.toDataURL(); link.click();
+        };
+        img.src = 'data:image/svg+xml;base64,' + btoa(svgData);
+    }
+
+    window.onload = () => { updateGraph(); updateBadges(); };
+</script>
+</body>
+</html>
